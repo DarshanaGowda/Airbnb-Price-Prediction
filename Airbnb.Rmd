@@ -1,0 +1,221 @@
+---
+title: "Airbnb"
+author: "Darshana Gowda"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output: html_notebook
+---
+
+## Loading packages
+```{r}
+library(mltools)
+library(data.table)
+library(psych)
+library(car)
+library(dplyr)
+library(Metrics)
+library(glmnet)
+```
+
+
+***
+# Linear Regression
+***
+## Read CSV
+```{r}
+# setting work directory
+setwd("C:/Users/DELL/Desktop/Notes/Data Mining and Machine Learning/Project/Final/AB_NYC_2019")
+
+# importing data
+airbnb <- read.csv("AB_NYC_092019.csv", header = T, na.strings = c(""), stringsAsFactors = T)
+# exploring data
+names(airbnb)
+str(airbnb)
+```
+
+```{r}
+# checking distribution of dependent variable
+summary(airbnb$price)
+```
+
+
+## Data cleaning
+```{r}
+# removing unwanted columns
+airbnb <- airbnb[, -c(1, 2, 3, 4, 6, 13)]
+
+# checking for NA values in the dataset
+sapply(airbnb,function(x) sum(is.na(x)))
+```
+
+```{r}
+# removing rows with NA values
+airbnb <- airbnb[!is.na(airbnb$reviews_per_month), ]
+
+sapply(airbnb,function(x) sum(is.na(x)))
+```
+
+
+```{r}
+# checking levels for the factor variables
+table(airbnb$room_type)
+table(airbnb$neighbourhood_group)
+
+# creating dummy variables for factor variables
+airbnb <- one_hot(as.data.table(airbnb))
+names(airbnb)
+names(airbnb)[1:5] <- c("ng_Bronx", "ng_Brooklyn",
+                        "ng_Manhattan", "ng_Queens", "ng_StatenIsland")
+names(airbnb)[8:11] <- c("rt_home", "rt_0hotel", "rt_private", "rt_shared")
+
+str(airbnb)
+
+# dropping one dummy variable from every feature
+airbnb <- airbnb[, -c(5, 11)]
+```
+
+```{r}
+# exploring correlation amongst variables
+cor(airbnb)
+# pairs.panels(airbnb[c("price", "minimum_nights", "number_of_reviews",
+#                        "reviews_per_month", "calculated_host_listings_count",
+#                        "availability_365", "longitude", "latitude")])
+
+```
+
+## Splitting images into test and train
+```{r}
+# resampling using Validation Set approach
+set.seed(123)
+s1 <- sample(1:nrow(airbnb), 0.7*nrow(airbnb))
+train <- airbnb[s1,]
+test <- airbnb[-s1,]
+```
+
+## Applying linear regression
+```{r}
+# applying Linear Regression model to training dataset
+# predictor variable is price of the airbnb listing
+airbnbTrainLM <- lm(price ~ ., data = train)
+summary(airbnbTrainLM)
+
+# performing check for multicollinearity between the predictor variables
+vif(airbnbTrainLM)
+
+
+# backward Selection
+# running Linear model without "calculated_host_listings_count" variable as it is not statistically significant
+airbnbTrainLM <- lm(price ~ . -calculated_host_listings_count, data = train)
+summary(airbnbTrainLM)
+
+# backward selection
+# running Linear model without "reviews_per_month" variable as it is not statistically significant
+airbnbTrainLM <- lm(price ~ . -calculated_host_listings_count -reviews_per_month, data = train)
+summary(airbnbTrainLM)
+
+# test for assumptions
+plot(airbnbTrainLM, which = 1)
+plot(airbnbTrainLM, which = 2)
+plot(airbnbTrainLM, which = 3)
+plot(airbnbTrainLM, which = 4)
+```
+
+## Prediction (Train)
+```{r}
+# predicting prices on training dataset
+train$predPrice <- predict(airbnbTrainLM, train)
+glimpse(train)
+```
+
+## Evalution (Train)
+```{r}
+# calculating RMSE for training dataset
+trainRMSELM <- mean((train$price - train$predPrice)**2) %>%
+  sqrt()
+trainRMSELM
+
+# calculating MAE for training dataset
+trainMAELM <- mae(train$price, train$predPrice)
+trainMAELM
+```
+
+## Prediction (Test)
+```{r}
+# predicting prices on test dataset
+test$predPrice <- predict(airbnbTrainLM, test)
+```
+
+## Evaluation (Test)
+```{r}
+# calculating RMSE for test dataset
+testRMSELM <- mean((test$price - test$predPrice)**2) %>%
+  sqrt()
+testRMSELM
+
+# calculating MAE for test dataset
+testMAELM <- mae(test$price, test$predPrice)
+testMAELM
+```
+
+***
+# Ridge Regression
+***
+```{r}
+# preparing training data for ridge regression
+xTrain = model.matrix(price ~ . -predPrice, train)
+yTrain = train$price
+
+# finding the best lambda value for ridge
+cv.out = cv.glmnet(xTrain, yTrain, alpha = 0)
+# par(mar=c(1,1,1,1))
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+
+
+# applying Ridge Regression model to training dataset
+airbnbTrainRidge <- glmnet(xTrain, yTrain, alpha = 0, lambda = bestlam)
+summary(airbnbTrainRidge)
+```
+## Prediction (Train)
+```{r}
+airbnbPredTrain <- predict(airbnbTrainRidge, s = bestlam, newx = xTrain)
+summary(airbnbPredTrain)
+```
+
+## Evaluation (Train)
+```{r}
+# calculating RMSE for train dataset
+trainRMSERidge <- sqrt(mean((airbnbPredTrain - train$price) **2))
+trainRMSERidge
+
+# calculating MAE for train dataset
+trainMAERidge <- mae(train$price, airbnbPredTrain)
+trainMAERidge
+```
+
+
+## Prediction (Test)
+```{r}
+# preparing test data for ridge regression
+xTest <- model.matrix(price ~ . -predPrice, test)
+yTest <- test$price
+
+# predicting price values on test data
+airbnbPredTest <- predict(airbnbTrainRidge, s = bestlam, newx = xTest)
+```
+
+
+## Evaluation (Test)
+```{r}
+# calculating RMSE for test dataset
+testRMSERidge <- sqrt(mean((airbnbPredTest - test$price) **2))
+testRMSERidge
+
+# calculating MAE for test dataset
+testMAERidge <- mae(test$price, airbnbPredTest)
+testMAERidge
+```
+
+
+
+
+
